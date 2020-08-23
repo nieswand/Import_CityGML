@@ -1,7 +1,7 @@
 bl_info = {
     "name": "CityGML Import Basic",
     "author": "",
-    "version": (0, 2),
+    "version": (0, 3),
     "blender": (2, 80, 0),
     "category": "Import-Export"
 }
@@ -12,6 +12,7 @@ from xml.etree import ElementTree as et
 import bpy
 from bpy_extras.io_utils import ImportHelper
 
+import re
 
 def main(filename):
 
@@ -37,7 +38,11 @@ def main(filename):
         # app:textureCoordinates
 
         poslist = p.find('.//{http://www.opengis.net/gml}posList')
-        text = poslist.text
+        textfull = poslist.text
+        textreduce1 = re.sub('\n', ' ', textfull) #remove line breaks
+        textreduce2 = re.sub('\t', ' ', textreduce1) #remove tabs
+        textreduce3 = re.sub(' +', ' ', textreduce2) # remove multiple whitespaces
+        text = textreduce3.strip() #remove first and last whitespace
 
         coords = [float(i) for i in text.split(' ')]
         verts = unflatten(coords)
