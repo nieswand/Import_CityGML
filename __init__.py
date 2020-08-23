@@ -1,7 +1,7 @@
 bl_info = {
     "name": "CityGML Import Basic",
     "author": "",
-    "version": (0, 3),
+    "version": (0, 4),
     "blender": (2, 80, 0),
     "category": "Import-Export"
 }
@@ -26,37 +26,50 @@ def main(filename):
     master_faces = []
     extend_verts = master_verts.extend
     append_faces = master_faces.append
+    
+    test = len(polygons[0].findall('.//{http://www.opengis.net/gml}posList'))
 
-    for i, p in enumerate(polygons):
-        # print(p.keys())   $ gets ID
-        # the ID is of a polygon is something like 80182bd5-e999-445c-a2d5-6dc690c928a4
+    if test == 0:
+        for i, p in enumerate(polygons):
+            texts = []
+            for poslist in p.findall('.//{http://www.opengis.net/gml}pos'):
+                positionfull = poslist.text
+                position = positionfull.strip() #remove first and last whitespace
+                texts.append(position)
+            text = ' '.join(texts)
 
-        # app:ParameterizedTexture
-        # app:imageURI
-        # app:mimeType
-        # app:target    <app:target uri="#ID">    # this ID refers to the polygon ID.
-        # app:textureCoordinates
+            coords = [float(i) for i in text.split(' ')]
+            verts = unflatten(coords)
+            
+            start_idx = len(master_verts)
+            end_idx = start_idx + len(verts)
+            extend_verts(verts)
+            append_faces([i for i in range(start_idx, end_idx)])
+            
+    else:
+        for i, p in enumerate(polygons):
+            poslist = p.find('.//{http://www.opengis.net/gml}posList')
+            textfull = poslist.text
+            textreduce1 = re.sub('\n', ' ', textfull) #remove line breaks
+            textreduce2 = re.sub('\t', ' ', textreduce1) #remove tabs
+            textreduce3 = re.sub(' +', ' ', textreduce2) # remove multiple whitespaces
+            text = textreduce3.strip() #remove first and last whitespace
 
-        poslist = p.find('.//{http://www.opengis.net/gml}posList')
-        textfull = poslist.text
-        textreduce1 = re.sub('\n', ' ', textfull) #remove line breaks
-        textreduce2 = re.sub('\t', ' ', textreduce1) #remove tabs
-        textreduce3 = re.sub(' +', ' ', textreduce2) # remove multiple whitespaces
-        text = textreduce3.strip() #remove first and last whitespace
+            coords = [float(i) for i in text.split(' ')]
+            verts = unflatten(coords)
 
-        coords = [float(i) for i in text.split(' ')]
-        verts = unflatten(coords)
+            start_idx = len(master_verts)
+            end_idx = start_idx + len(verts)
+            extend_verts(verts)
+            append_faces([i for i in range(start_idx, end_idx)])
 
-        start_idx = len(master_verts)
-        end_idx = start_idx + len(verts)
-        extend_verts(verts)
-        append_faces([i for i in range(start_idx, end_idx)])
-
-    mesh = bpy.data.meshes.new("mesh_name")
+    ob_name = os.path.basename(filename)
+    
+    mesh = bpy.data.meshes.new(ob_name)
     mesh.from_pydata(master_verts, [], master_faces)
     mesh.update()
 
-    obj = bpy.data.objects.new("obj_name", mesh)
+    obj = bpy.data.objects.new(ob_name, mesh)
 
     scene = bpy.context.scene
     scene.collection.objects.link(obj)
