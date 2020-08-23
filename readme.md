@@ -6,6 +6,8 @@ features:
  
  - IO menu item (import cityGML .xml)
  - imports all geometry as one object
+ - imports gml:posList and lists of gml:pos tags
+ - object&mesh name = imported file name
 
 basic means basic :)
 
