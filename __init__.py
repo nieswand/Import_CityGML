@@ -16,7 +16,7 @@ import re
 
 def main(filename):
 
-    def unflatten(coords, s=1):
+    def unflatten(coords, s=0.001):
         return [(coords[i] * s, coords[i + 1] * s, coords[i + 2] * s) for i in range(0, len(coords), 3)]
 
     tree = et.parse(filename)
