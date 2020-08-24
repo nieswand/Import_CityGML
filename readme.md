@@ -8,6 +8,8 @@ features:
  - imports all geometry as one object
  - imports gml:posList and lists of gml:pos tags
  - object&mesh name = imported file name
+ - imports ground triangles
+ - imports into current collection
 
 basic means basic :)
 
