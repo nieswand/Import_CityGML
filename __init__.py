@@ -16,21 +16,26 @@ import re
 
 def main(filename):
 
-    def unflatten(coords, s=0.001):
+    def unflatten(coords, s=1):
         return [(coords[i] * s, coords[i + 1] * s, coords[i + 2] * s) for i in range(0, len(coords), 3)]
 
     tree = et.parse(filename)
+    polygons = []
     polygons = tree.findall('.//{http://www.opengis.net/gml}Polygon')
-
+    triangles = []
+    triangles = tree.findall('.//{http://www.opengis.net/gml}Triangle')
+    faces = []
+    faces = polygons + triangles
+        
     master_verts = []
     master_faces = []
     extend_verts = master_verts.extend
     append_faces = master_faces.append
     
-    test = len(polygons[0].findall('.//{http://www.opengis.net/gml}posList'))
+    test = len(faces[0].findall('.//{http://www.opengis.net/gml}posList'))
 
     if test == 0:
-        for i, p in enumerate(polygons):
+        for i, p in enumerate(faces):
             texts = []
             for poslist in p.findall('.//{http://www.opengis.net/gml}pos'):
                 positionfull = poslist.text
@@ -47,7 +52,7 @@ def main(filename):
             append_faces([i for i in range(start_idx, end_idx)])
             
     else:
-        for i, p in enumerate(polygons):
+        for i, p in enumerate(faces):
             poslist = p.find('.//{http://www.opengis.net/gml}posList')
             textfull = poslist.text
             textreduce1 = re.sub('\n', ' ', textfull) #remove line breaks
@@ -72,7 +77,8 @@ def main(filename):
     obj = bpy.data.objects.new(ob_name, mesh)
 
     scene = bpy.context.scene
-    scene.collection.objects.link(obj)
+    current_collection = bpy.context.collection.name
+    scene.collection.children[current_collection].objects.link(obj)
 
 
 # pick folder and import from... maybe this is a bad name.
