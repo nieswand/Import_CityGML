@@ -8,8 +8,12 @@ features:
  - imports all geometry as one object
  - imports gml:posList and lists of gml:pos tags
  - object&mesh name = imported file name
- - imports ground triangles
+ - imports ground triangles (if any)
  - imports into current collection
+ - multiple file import
+ - exeption handling if xml file has no geometry
+ - console progress info
+ - import scale dialog
 
 basic means basic :)
 
