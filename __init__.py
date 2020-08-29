@@ -1,7 +1,7 @@
 bl_info = {
     "name": "CityGML Import Basic",
     "author": "",
-    "version": (0, 4),
+    "version": (0, 4.01),
     "blender": (2, 80, 0),
     "category": "Import-Export"
 }
@@ -14,9 +14,15 @@ from bpy_extras.io_utils import ImportHelper
 
 import re
 
-def main(filename):
+from bpy.props import (BoolProperty,
+                       FloatProperty,
+                       StringProperty,
+                       EnumProperty,
+                       CollectionProperty)
 
-    def unflatten(coords, s=0.001):
+def main(filename, scale):
+
+    def unflatten(coords, s=scale):
         return [(coords[i] * s, coords[i + 1] * s, coords[i + 2] * s) for i in range(0, len(coords), 3)]
 
     tree = et.parse(filename)
@@ -84,16 +90,38 @@ def main(filename):
 # pick folder and import from... maybe this is a bad name.
 class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
     bl_idname = "wm.citygml_folder_selector"
-    bl_label = "pick an xml file"
+    bl_label = "pick an xml file(s)"
 
     filename_ext = ".xml"
     use_filter_folder = True
+    
+    files: CollectionProperty(type=bpy.types.PropertyGroup)
+    scale_setting: FloatProperty(
+        name="Import scale",
+        description="1 for meters, 0.001 for kilometers",
+        min=0.0, max=1.0,
+        soft_min=0.0, soft_max=1.0,
+        precision = 3,
+        default=1.0
+        )
+    
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.prop(self, "scale_setting")
 
     def execute(self, context):
-        fdir = self.properties.filepath
-        main(fdir)
+        folder = (os.path.dirname(self.filepath))
+        for i in self.files:
+            path_to_file = (os.path.join(folder, i.name))
+            try:
+                main(
+                    filename = path_to_file,
+                    scale = self.scale_setting)
+                print(str(i.name) + " imported")
+            except:
+                print(str(i.name) + " error, no valid geometry")
         return{'FINISHED'}
-
 
 def menu_import(self, context):
     self.layout.operator(CityGMLDirectorySelector.bl_idname, text="cityGML (.xml)")
