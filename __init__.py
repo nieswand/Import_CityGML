@@ -101,7 +101,7 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
     
     files: CollectionProperty(type=bpy.types.PropertyGroup)
     scale_setting: FloatProperty(
-        name="Import scale",
+        name="Import Scale",
         description="1 for meters, 0.001 for kilometers",
         min=0.0, max=1.0,
         soft_min=0.0, soft_max=1.0,
@@ -109,7 +109,7 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
         default=1.0
         )
     origin_setting: FloatVectorProperty(
-        name="Origin Offset",
+        name="Origin Point",
         description="can be helpful for reduce large coordinates values",
         precision = 1,
         size = 3,
