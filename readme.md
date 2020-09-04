@@ -14,6 +14,7 @@ features:
  - exeption handling if xml file has no geometry
  - console progress info
  - import scale dialog
+ - origin point dialog
 
 basic means basic :)
 
