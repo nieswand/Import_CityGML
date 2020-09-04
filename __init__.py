@@ -1,9 +1,12 @@
 bl_info = {
-    "name": "CityGML Import Basic",
+    "name": "Import CityGML",
     "author": "",
-    "version": (0, 4.01),
-    "blender": (2, 80, 0),
-    "category": "Import-Export"
+    "version": (0, 4, 2),
+    "blender": (2, 90, 0),
+    "category": "Import-Export",
+    "description": "Import geometry from CityGML file(s)",
+    "wiki_url": "https://github.com/ppaawweeuu/Import_CityGML",    
+#    "tracker_url": "http://  "
 }
 
 import os
@@ -18,12 +21,13 @@ from bpy.props import (BoolProperty,
                        FloatProperty,
                        StringProperty,
                        EnumProperty,
-                       CollectionProperty)
+                       CollectionProperty,
+                       FloatVectorProperty)
 
-def main(filename, scale):
+def main(filename, scale, origin):
 
     def unflatten(coords, s=scale):
-        return [(coords[i] * s, coords[i + 1] * s, coords[i + 2] * s) for i in range(0, len(coords), 3)]
+        return [((coords[i]-origin[0]) * s, (coords[i + 1]-origin[1]) * s, (coords[i + 2]-origin[2]) * s) for i in range(0, len(coords), 3)]
 
     tree = et.parse(filename)
     polygons = []
@@ -104,11 +108,28 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
         precision = 3,
         default=1.0
         )
+    origin_setting: FloatVectorProperty(
+        name="Origin Offset",
+        description="can be helpful for reduce large coordinates values",
+        precision = 1,
+        size = 3,
+        default=(0.0, 0.0, 0.0)
+        )    
     
     def draw(self, context):
         layout = self.layout
-        row = layout.row(align=True)
-        row.prop(self, "scale_setting")
+        
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text='Import Scale:')
+        row = box.row(align=True)
+        row.prop(self, "scale_setting", text='')
+        
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text='Origin Offset (X,Y,Z):')
+        row = box.row(align=True)
+        row.prop(self, "origin_setting", text='')
 
     def execute(self, context):
         folder = (os.path.dirname(self.filepath))
@@ -117,7 +138,8 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
             try:
                 main(
                     filename = path_to_file,
-                    scale = self.scale_setting)
+                    scale = self.scale_setting,
+                    origin = self.origin_setting)
                 print(str(i.name) + " imported")
             except:
                 print(str(i.name) + " error, no valid geometry")
