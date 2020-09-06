@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Import CityGML",
     "author": "",
-    "version": (0, 4, 2),
+    "version": (0, 4, 3),
     "blender": (2, 90, 0),
     "category": "Import-Export",
     "description": "Import geometry from CityGML file(s)",
@@ -24,7 +24,7 @@ from bpy.props import (BoolProperty,
                        CollectionProperty,
                        FloatVectorProperty)
 
-def main(filename, scale, origin):
+def main(filename, scale, origin, viewport):
 
     def unflatten(coords, s=scale):
         return [((coords[i]-origin[0]) * s, (coords[i + 1]-origin[1]) * s, (coords[i + 2]-origin[2]) * s) for i in range(0, len(coords), 3)]
@@ -42,6 +42,8 @@ def main(filename, scale, origin):
     extend_verts = master_verts.extend
     append_faces = master_faces.append
     
+    max_cord = 1.0
+    
     test = len(faces[0].findall('.//{http://www.opengis.net/gml}posList'))
 
     if test == 0:
@@ -54,6 +56,13 @@ def main(filename, scale, origin):
             text = ' '.join(texts)
 
             coords = [float(i) for i in text.split(' ')]
+            
+            max_v = max(coords)
+            if max_v > max_cord:
+                max_cord = max_v
+            else:
+                pass
+            
             verts = unflatten(coords)
             
             start_idx = len(master_verts)
@@ -71,6 +80,13 @@ def main(filename, scale, origin):
             text = textreduce3.strip() #remove first and last whitespace
 
             coords = [float(i) for i in text.split(' ')]
+                        
+            max_v = max(coords)
+            if max_v > max_cord:
+                max_cord = max_v
+            else:
+                pass
+            
             verts = unflatten(coords)
 
             start_idx = len(master_verts)
@@ -89,6 +105,23 @@ def main(filename, scale, origin):
     scene = bpy.context.scene
     current_collection = bpy.context.collection.name
     scene.collection.children[current_collection].objects.link(obj)
+    
+    if viewport == True:
+        screen = bpy.context.screen
+        for i in screen.areas:
+            if i.type == 'VIEW_3D':
+                vieport = i
+            else:
+                continue
+        a = int((max_cord - min(origin[:])) * scale)
+        b = len(str(a))
+        c = 10**b
+        while c < 100:
+            c = 100
+        vieport.spaces[0].clip_end = c * 10
+        vieport.spaces[0].clip_start = c / 100000
+    else:
+        pass
 
 
 # pick folder and import from... maybe this is a bad name.
@@ -114,10 +147,21 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
         precision = 1,
         size = 3,
         default=(0.0, 0.0, 0.0)
-        )    
-    
+        )
+    viewport_setting: BoolProperty(
+        name="Recalculate View Clip Start and End",
+        description="try to align start clip and end clip in current viewport based on objects size",
+        default=False,
+        )
+        
     def draw(self, context):
         layout = self.layout
+        
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text='Origin Point (X,Y,Z):')
+        row = box.row(align=True)
+        row.prop(self, "origin_setting", text='')
         
         box = layout.box()
         row = box.row(align=True)
@@ -127,9 +171,9 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
         
         box = layout.box()
         row = box.row(align=True)
-        row.label(text='Origin Offset (X,Y,Z):')
+        row.label(text='Recalculate View Clips:')
         row = box.row(align=True)
-        row.prop(self, "origin_setting", text='')
+        row.prop(self, "viewport_setting", text='')
 
     def execute(self, context):
         folder = (os.path.dirname(self.filepath))
@@ -139,7 +183,9 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
                 main(
                     filename = path_to_file,
                     scale = self.scale_setting,
-                    origin = self.origin_setting)
+                    origin = self.origin_setting,
+                    viewport = self.viewport_setting,
+                    )
                 print(str(i.name) + " imported")
             except:
                 print(str(i.name) + " error, no valid geometry")
