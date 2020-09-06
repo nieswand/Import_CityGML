@@ -15,6 +15,7 @@ features:
  - console progress info
  - import scale dialog
  - origin point dialog
+ - recalculate viewport clipping dialog
 
 basic means basic :)
 
