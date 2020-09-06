@@ -119,7 +119,7 @@ def main(filename, scale, origin, viewport):
         while c < 100:
             c = 100
         vieport.spaces[0].clip_end = c * 10
-        vieport.spaces[0].clip_start = c / 100000
+        vieport.spaces[0].clip_start = c / 1000000
     else:
         pass
 
@@ -144,24 +144,18 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
     origin_setting_x: FloatProperty(
         name="Origin Point X",
         description="X value from imported file to be 0",
-        #min=0.0, max=1.0,
-        #soft_min=-1000000.0, soft_max=1000000.0,
         precision = 1,
         default=0.0
         )
     origin_setting_y: FloatProperty(
         name="Origin Point X",
         description="Y value from imported file to be 0",
-        #min=0.0, max=1.0,
-        #soft_min=-1000000.0, soft_max=1000000.0,
         precision = 1,
         default=0.0
         )
     origin_setting_z: FloatProperty(
         name="Origin Point X",
         description="Z value from imported file to be 0",
-        #min=0.0, max=1.0,
-        #soft_min=-1000000.0, soft_max=1000000.0,
         precision = 1,
         default=0.0
         )
