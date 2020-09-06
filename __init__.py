@@ -136,17 +136,34 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
     scale_setting: FloatProperty(
         name="Import Scale",
         description="1 for meters, 0.001 for kilometers",
-        min=0.0, max=1.0,
+        #min=0.0, max=1.0,
         soft_min=0.0, soft_max=1.0,
         precision = 3,
         default=1.0
         )
-    origin_setting: FloatVectorProperty(
-        name="Origin Point",
-        description="can be helpful for reduce large coordinates values",
+    origin_setting_x: FloatProperty(
+        name="Origin Point X",
+        description="X value from imported file to be 0",
+        #min=0.0, max=1.0,
+        #soft_min=-1000000.0, soft_max=1000000.0,
         precision = 1,
-        size = 3,
-        default=(0.0, 0.0, 0.0)
+        default=0.0
+        )
+    origin_setting_y: FloatProperty(
+        name="Origin Point X",
+        description="Y value from imported file to be 0",
+        #min=0.0, max=1.0,
+        #soft_min=-1000000.0, soft_max=1000000.0,
+        precision = 1,
+        default=0.0
+        )
+    origin_setting_z: FloatProperty(
+        name="Origin Point X",
+        description="Z value from imported file to be 0",
+        #min=0.0, max=1.0,
+        #soft_min=-1000000.0, soft_max=1000000.0,
+        precision = 1,
+        default=0.0
         )
     viewport_setting: BoolProperty(
         name="Recalculate View Clip Start and End",
@@ -161,7 +178,11 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
         row = box.row(align=True)
         row.label(text='Origin Point (X,Y,Z):')
         row = box.row(align=True)
-        row.prop(self, "origin_setting", text='')
+        row.prop(self, "origin_setting_x", text='X:')
+        row = box.row(align=True)
+        row.prop(self, "origin_setting_y", text='Y:')
+        row = box.row(align=True)
+        row.prop(self, "origin_setting_z", text='Z:')
         
         box = layout.box()
         row = box.row(align=True)
@@ -183,7 +204,7 @@ class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
                 main(
                     filename = path_to_file,
                     scale = self.scale_setting,
-                    origin = self.origin_setting,
+                    origin = (self.origin_setting_x, self.origin_setting_y, self.origin_setting_z),
                     viewport = self.viewport_setting,
                     )
                 print(str(i.name) + " imported")
