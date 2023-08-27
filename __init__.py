@@ -102,10 +102,9 @@ def main(filename, scale, origin, viewport):
 
     obj = bpy.data.objects.new(ob_name, mesh)
 
-    scene = bpy.context.scene
-    current_collection = bpy.context.collection.name
-    scene.collection.children[current_collection].objects.link(obj)
-    
+    current_collection = bpy.context.collection
+    current_collection.objects.link(obj)
+
     if viewport == True:
         screen = bpy.context.screen
         for i in screen.areas:
