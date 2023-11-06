@@ -1,219 +1,277 @@
 bl_info = {
     "name": "Import CityGML",
-    "author": "",
-    "version": (0, 4, 3),
-    "blender": (2, 90, 0),
+    "author": "Dealga McArdle, ppaawweeuu, Simon Nieswand",
+    "version": (0, 5, 0),
+    "blender": (2, 80, 0),
     "category": "Import-Export",
     "description": "Import geometry from CityGML file(s)",
-    "wiki_url": "https://github.com/ppaawweeuu/Import_CityGML",    
-#    "tracker_url": "http://  "
+    "wiki_url": "https://github.com/ppaawweeuu/Import_CityGML",
 }
 
-import os
-from xml.etree import ElementTree as et
 
+import bmesh
 import bpy
 from bpy_extras.io_utils import ImportHelper
+from bpy.props import (
+    BoolProperty,
+    FloatProperty,
+    CollectionProperty,
+)
+import math
+import os
+from xml.etree import ElementTree as ET
 
-import re
 
-from bpy.props import (BoolProperty,
-                       FloatProperty,
-                       StringProperty,
-                       EnumProperty,
-                       CollectionProperty,
-                       FloatVectorProperty)
+def get_prefix_map(
+    filename: str, allow_duplicates: bool = False, exit_early: bool = True):
+    prefix_map = {}
+    for event, element in ET.iterparse(filename, events=("start-ns", "start")):
+        if event == "start-ns":
+            prefix, uri = element
+            saved_uri = prefix_map.get(prefix)
+            if saved_uri is not None and saved_uri != uri and not allow_duplicates:
+                raise KeyError(
+                    f"Duplicate prefix '{prefix}' with different URIs found. "
+                    f"Saved URI: {saved_uri}, new URI: {uri}.")
+            prefix_map[prefix] = uri
+        elif event == "start" and exit_early:
+            break
+    return prefix_map
 
-def main(filename, scale, origin, viewport):
 
-    def unflatten(coords, s=scale):
-        return [((coords[i]-origin[0]) * s, (coords[i + 1]-origin[1]) * s, (coords[i + 2]-origin[2]) * s) for i in range(0, len(coords), 3)]
-
-    tree = et.parse(filename)
-    polygons = []
-    polygons = tree.findall('.//{http://www.opengis.net/gml}Polygon')
-    triangles = []
-    triangles = tree.findall('.//{http://www.opengis.net/gml}Triangle')
-    faces = []
-    faces = polygons + triangles
-        
-    master_verts = []
-    master_faces = []
-    extend_verts = master_verts.extend
-    append_faces = master_faces.append
-    
-    max_cord = 1.0
-    
-    test = len(faces[0].findall('.//{http://www.opengis.net/gml}posList'))
-
-    if test == 0:
-        for i, p in enumerate(faces):
-            texts = []
-            for poslist in p.findall('.//{http://www.opengis.net/gml}pos'):
-                positionfull = poslist.text
-                position = positionfull.strip() #remove first and last whitespace
-                texts.append(position)
-            text = ' '.join(texts)
-
-            coords = [float(i) for i in text.split(' ')]
-            
-            max_v = max(coords)
-            if max_v > max_cord:
-                max_cord = max_v
-            else:
-                pass
-            
-            verts = unflatten(coords)
-            
-            start_idx = len(master_verts)
-            end_idx = start_idx + len(verts)
-            extend_verts(verts)
-            append_faces([i for i in range(start_idx, end_idx)])
-            
+def substitute_uri(tag: str, prefix_map=None) -> str:
+    if prefix_map is None or len(prefix_map) == 0:
+        return tag
+    splits = tag.split(":")
+    if len(splits) == 1:
+        return tag
+    elif len(splits) == 2:
+        prefix, tag = splits
+        uri = prefix_map.get(prefix)
+        if uri is None:
+            raise KeyError(
+                f"Prefix '{prefix}' not found in provided prefix map.")
+        return f"{{{uri}}}{tag}"
     else:
-        for i, p in enumerate(faces):
-            poslist = p.find('.//{http://www.opengis.net/gml}posList')
-            textfull = poslist.text
-            textreduce1 = re.sub('\n', ' ', textfull) #remove line breaks
-            textreduce2 = re.sub('\t', ' ', textreduce1) #remove tabs
-            textreduce3 = re.sub(' +', ' ', textreduce2) # remove multiple whitespaces
-            text = textreduce3.strip() #remove first and last whitespace
+        raise AttributeError(f"Multiple colons in tag '{tag}' are invalid.")
 
-            coords = [float(i) for i in text.split(' ')]
-                        
-            max_v = max(coords)
-            if max_v > max_cord:
-                max_cord = max_v
-            else:
-                pass
-            
-            verts = unflatten(coords)
 
-            start_idx = len(master_verts)
-            end_idx = start_idx + len(verts)
-            extend_verts(verts)
-            append_faces([i for i in range(start_idx, end_idx)])
+def string_to_list(string, typ=float, delimiter=" "):
+    splits = string.split(delimiter)
+    return list(map(typ, filter(None, splits)))
 
-    ob_name = os.path.basename(filename)
-    
-    mesh = bpy.data.meshes.new(ob_name)
-    mesh.from_pydata(master_verts, [], master_faces)
-    mesh.update()
 
-    obj = bpy.data.objects.new(ob_name, mesh)
+def unflatten_poslist(poslist, n_dims=3):
+    return [
+        tuple(
+            poslist[i + k] for k in range(n_dims)
+        ) for i in range(0, len(poslist), n_dims)
+    ]
 
-    current_collection = bpy.context.collection
-    current_collection.objects.link(obj)
 
-    if viewport == True:
+def offset_coords(coords, offset):
+    return [
+        tuple(
+            coord[i] + offset[i] for i in range(len(offset))
+        ) for coord in coords
+    ]
+
+
+def scale_coords(coords, scale):
+    return [
+        tuple(
+            dim * scale for dim in coord
+        ) for coord in coords
+    ]
+
+
+def transform_coords(coords, offset, scale):
+    return scale_coords(offset_coords(coords, offset), scale)
+
+
+def main(filename, origin, scale, merge_vertices, merge_distance, recalculate_view):
+    prefix_map = get_prefix_map(filename)
+    offset = tuple([-1 * dim for dim in origin])
+
+    bm = bmesh.new()
+    for _, element in ET.iterparse(filename, events=("end",)):
+        if element.tag != substitute_uri("core:cityObjectMember", prefix_map):
+            continue
+
+        bldgs = element.findall(".//bldg:Building", prefix_map)
+        for bldg in bldgs:
+            bldg_verts = []
+            parts = bldg.findall(".//bldg:BuildingPart", prefix_map)
+            if len(parts) == 0:
+                parts = [bldg]
+            for part in parts:
+                polygons = part.findall('.//gml:Polygon', prefix_map)
+                triangles = part.findall('.//gml:Triangle', prefix_map)
+                faces = polygons + triangles
+                for face in faces:
+                    face_verts = []
+                    pos_list = face.find(".//gml:posList", prefix_map)
+                    if pos_list is None:
+                        pos_list = ""
+                        positions = face.findall(".//gml:pos", prefix_map)
+                        for pos in positions:
+                            pos_list += f"{pos.text} "
+                    else:
+                        pos_list = pos_list.text
+                    pos_list = " ".join(pos_list.split()) # remove tabs etc.
+                    coords = unflatten_poslist(string_to_list(pos_list))
+                    if coords[0] == coords[-1]:
+                        coords = coords[:-1]
+                    coords = transform_coords(coords, offset=offset, scale=scale)
+                    for vert in coords:
+                        face_verts.append(bm.verts.new(vert))
+                    bm.faces.new(face_verts)
+                    bldg_verts.extend(face_verts)
+            if merge_vertices:
+                bmesh.ops.remove_doubles(
+                    bm, verts=bldg_verts, dist=merge_distance)
+        element.clear()
+
+    if len(bm.verts) == 0:
+        del bm
+        raise ValueError("No geometry found in GML file.")
+
+    obj_name = os.path.basename(filename)
+    mesh = bpy.data.meshes.new(obj_name)
+    bm.to_mesh(mesh)
+    obj = bpy.data.objects.new(obj_name, mesh)
+    bpy.context.collection.objects.link(obj)
+
+    if recalculate_view:
+        viewport = None
         screen = bpy.context.screen
-        for i in screen.areas:
-            if i.type == 'VIEW_3D':
-                vieport = i
-            else:
-                continue
-        a = int((max_cord - min(origin[:])) * scale)
-        b = len(str(a))
-        c = 10**b
-        while c < 100:
-            c = 100
-        vieport.spaces[0].clip_end = c * 10
-        vieport.spaces[0].clip_start = c / 1000000
-    else:
-        pass
+        for area in screen.areas:
+            if area.type == "VIEW_3D":
+                viewport = area
+        if viewport is not None:
+            pow10 = 1 + math.floor(math.log10(obj.dimensions.length))
+            viewport.spaces[0].clip_end = max(10**(pow10 + 3), 100)
 
 
-# pick folder and import from... maybe this is a bad name.
-class CityGMLDirectorySelector(bpy.types.Operator, ImportHelper):
-    bl_idname = "wm.citygml_folder_selector"
-    bl_label = "pick an xml file(s)"
+class CityGMLSelector(bpy.types.Operator, ImportHelper):
+    @classmethod
+    def description(cls, context, properties):
+        return "Import geometry from CityGML file(s)"
 
-    filename_ext = ".xml"
+    bl_idname = "wm.citygml_selector"
+    bl_label = "Pick GML file(s)"
+
+    filename_ext = ".gml"
     use_filter_folder = True
-    
+
     files: CollectionProperty(type=bpy.types.PropertyGroup)
-    scale_setting: FloatProperty(
+    import_scale: FloatProperty(
         name="Import Scale",
-        description="1 for meters, 0.001 for kilometers",
-        #min=0.0, max=1.0,
+        description="Scale imported geometry by this factor.",
         soft_min=0.0, soft_max=1.0,
-        precision = 3,
-        default=1.0
-        )
-    origin_setting_x: FloatProperty(
+        precision=3,
+        default=1.0,
+    )
+    origin_x: FloatProperty(
         name="Origin Point X",
         description="X value from imported file to be 0",
-        precision = 1,
-        default=0.0
-        )
-    origin_setting_y: FloatProperty(
-        name="Origin Point X",
+        precision=1,
+        default=0.0,
+    )
+    origin_y: FloatProperty(
+        name="Origin Point Y",
         description="Y value from imported file to be 0",
-        precision = 1,
-        default=0.0
-        )
-    origin_setting_z: FloatProperty(
-        name="Origin Point X",
+        precision=1,
+        default=0.0,
+    )
+    origin_z: FloatProperty(
+        name="Origin Point Z",
         description="Z value from imported file to be 0",
-        precision = 1,
-        default=0.0
-        )
-    viewport_setting: BoolProperty(
-        name="Recalculate View Clip Start and End",
-        description="try to align start clip and end clip in current viewport based on objects size",
+        precision=1,
+        default=0.0,
+    )
+    recalculate_view: BoolProperty(
+        name="Recalculate View Clip End",
+        description=(
+            "Recalculate view clip end in current viewport "
+            "based on size of imported geometry"),
         default=False,
-        )
-        
+    )
+    merge_vertices: BoolProperty(
+        name="Merge Vertices",
+        description="Merge duplicate vertices of buildings (slow)",
+        default=False,
+    )
+    merge_distance: FloatProperty(
+        name="Merge Distance",
+        description="Vertex merge distance",
+        precision=4,
+        default=0.001,
+    )
+
     def draw(self, context):
         layout = self.layout
-        
+
         box = layout.box()
         row = box.row(align=True)
-        row.label(text='Origin Point (X,Y,Z):')
+        row.label(text="Origin Point:")
         row = box.row(align=True)
-        row.prop(self, "origin_setting_x", text='X:')
+        row.prop(self, "origin_x", text="X:")
         row = box.row(align=True)
-        row.prop(self, "origin_setting_y", text='Y:')
+        row.prop(self, "origin_y", text="Y:")
         row = box.row(align=True)
-        row.prop(self, "origin_setting_z", text='Z:')
-        
+        row.prop(self, "origin_z", text="Z:")
+
         box = layout.box()
         row = box.row(align=True)
-        row.label(text='Import Scale:')
+        row.label(text="Import Scale:")
         row = box.row(align=True)
-        row.prop(self, "scale_setting", text='')
-        
+        row.prop(self, "import_scale", text="")
+
         box = layout.box()
         row = box.row(align=True)
-        row.label(text='Recalculate View Clips:')
+        row.prop(self, "merge_vertices", text="Merge Vertices (slow)")
         row = box.row(align=True)
-        row.prop(self, "viewport_setting", text='')
+        row.prop(self, "merge_distance", text="Merge Distance")
+
+        box = layout.box()
+        row = box.row(align=True)
+        row.prop(self, "recalculate_view", text="Set View Clip End")
 
     def execute(self, context):
         folder = (os.path.dirname(self.filepath))
-        for i in self.files:
-            path_to_file = (os.path.join(folder, i.name))
+        for file in self.files:
+            path_to_file = os.path.join(folder, file.name)
             try:
                 main(
-                    filename = path_to_file,
-                    scale = self.scale_setting,
-                    origin = (self.origin_setting_x, self.origin_setting_y, self.origin_setting_z),
-                    viewport = self.viewport_setting,
-                    )
-                print(str(i.name) + " imported")
-            except:
-                print(str(i.name) + " error, no valid geometry")
-        return{'FINISHED'}
+                    filename=path_to_file,
+                    origin=(
+                        self.origin_x,
+                        self.origin_y,
+                        self.origin_z,
+                    ),
+                    scale=self.import_scale,
+                    merge_vertices=self.merge_vertices,
+                    merge_distance=self.merge_distance,
+                    recalculate_view=self.recalculate_view,
+                )
+                print(f"'{file.name}' imported")
+            except Exception as exc:
+                print(
+                    f"Error while importing '{file.name}': "
+                    f"[{type(exc).__name__}] {exc}")
+        return{"FINISHED"}
+
 
 def menu_import(self, context):
-    self.layout.operator(CityGMLDirectorySelector.bl_idname, text="cityGML (.xml)")
+    self.layout.operator(CityGMLSelector.bl_idname, text="CityGML (.gml)")
 
 
 def register():
-    bpy.utils.register_class(CityGMLDirectorySelector)
+    bpy.utils.register_class(CityGMLSelector)
     bpy.types.TOPBAR_MT_file_import.append(menu_import)
 
 
 def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
-    bpy.utils.unregister_class(CityGMLDirectorySelector)
+    bpy.utils.unregister_class(CityGMLSelector)
