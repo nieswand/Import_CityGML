@@ -1,14 +1,3 @@
-bl_info = {
-    "name": "Import CityGML",
-    "author": "Dealga McArdle, ppaawweeuu, Simon Nieswand",
-    "version": (0, 5, 0),
-    "blender": (2, 80, 0),
-    "category": "Import-Export",
-    "description": "Import geometry from CityGML file(s)",
-    "wiki_url": "https://github.com/ppaawweeuu/Import_CityGML",
-}
-
-
 import bmesh
 import bpy
 from bpy_extras.io_utils import ImportHelper
@@ -20,66 +9,174 @@ from xml.etree import ElementTree as ET
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
-def get_prefix_map(
+bl_info = {
+    "name": "Import CityGML",
+    "author": "Dealga McArdle, ppaawweeuu, Simon Nieswand",
+    "version": (0, 5, 0),
+    "blender": (2, 80, 0),
+    "category": "Import-Export",
+    "description": "Import geometry from CityGML file(s)",
+    "wiki_url": "https://github.com/ppaawweeuu/Import_CityGML",
+}
+
+
+def get_namespaces(
     filename: str, allow_duplicates: bool = False, exit_early: bool = True
 ) -> Dict[str, str]:
-    prefix_map = {}
+    """Get namespaces used in a GML/XML file.
+
+    Args:
+        filename: Path to the GML/XML file to get the namespaces from.
+        allow_duplicates: Whether a namespace is allowed to appear multiple
+            times with different URIs. If True, the returned map will only
+            contain the URI of the last occurrence of the duplicate namespace.
+        exit_early: Whether the look-up of namespaces should be stopped after
+            the root element of the GML/XML tree was handled. If False, the
+            input file will be parsed fully which can result in long run times
+            depending on the file size.
+
+    Returns:
+        Dictionary mapping namespaces to URIs.
+
+    Raises:
+        KeyError: If @allow_duplicates is False and a namespace is encounterd
+            at least twice with different URIs.
+    """
+    namespaces = {}
     for event, element in ET.iterparse(filename, events=("start-ns", "start")):
         if event == "start-ns":
-            prefix, uri = element
-            saved_uri = prefix_map.get(prefix)
+            namespace, uri = element
+            saved_uri = namespaces.get(namespace)
             if saved_uri is not None and saved_uri != uri and not allow_duplicates:
                 raise KeyError(
-                    f"Duplicate prefix '{prefix}' with different URIs found. "
+                    f"Duplicate namespace '{namespace}' with different URIs found. "
                     f"Saved URI: {saved_uri}, new URI: {uri}.")
-            prefix_map[prefix] = uri
+            namespaces[namespace] = uri
         elif event == "start" and exit_early:
             break
-    return prefix_map
+    return namespaces
 
 
 def substitute_uri(
-    tag: str, prefix_map: Optional[Dict[str, str]] = None
+    tag: str, namespaces: Optional[Dict[str, str]] = None
 ) -> str:
-    if prefix_map is None or len(prefix_map) == 0:
+    """Subtitute the namespace prefix in an GML/XML element tag with the
+    corresponding URI or prepend the URI of the default namespace if no prefix
+    is given.
+
+    Args:
+        tag: GML/XML element tag as a string. Usually in the form of
+            'namespace_prefix:some_tag'.
+        namespaces: A dictionary mapping namespace prefixes to URIs. If None or
+            empty, @tag will be returned unchanged. The URI of the default
+            namespace should be included with an empty string ('') as the key.
+
+    Returns:
+        Element tag with namespace prefix replaced with the corresponding URI.
+        Or simply @tag if @namespaces is None or empty.
+
+    Raises:
+        KeyError: If the namespace prefix found in @tag is not present as a key
+            in @namespaces or if no namespace prefix was detected and @namespaces
+            has no entry for the default namespace.
+        AttributeError: If multiple colons are found in @tag.
+    """
+    if namespaces is None or len(namespaces) == 0:
         return tag
     splits = tag.split(":")
     if len(splits) == 1:
-        return tag
+        uri = namespaces.get("")
+        if uri is None:
+            raise KeyError(
+                f"Tag '{tag}' doesn't include a namespace prefix and "
+                "no default namespace found in provided prefix map.")
     elif len(splits) == 2:
         prefix, tag = splits
-        uri = prefix_map.get(prefix)
+        uri = namespaces.get(prefix)
         if uri is None:
             raise KeyError(
                 f"Prefix '{prefix}' not found in provided prefix map.")
-        return f"{{{uri}}}{tag}"
     else:
         raise AttributeError(f"Multiple colons in tag '{tag}' are invalid.")
+    return f"{{{uri}}}{tag}"
 
 
 def string_to_list(
-    string: str, typ: Optional[Callable] = None, delimiter: str = " "
+    string: str, type: Optional[Callable] = None, delimiter: str = " "
 ) -> List[Any]:
+    """Convert a string containing multiple elements into a list of those elements.
+    The elements can be converted to a custom type and will be filtered for
+    empty / None elements (before the conversion).
+
+    Args:
+        string: String containing elements separated by @delimiter.
+        type: Callable to convert elements from string by calling type(element: str).
+            If None, the elements will not be converted.
+        delimiter: String that is used as delimiter between list elements.
+
+    Returns:
+        List of elements filtered for empty / None elements and possibly converted.
+    """
     splits = string.split(delimiter)
     splits = filter(None, splits)
-    if typ is None:
+    if type is None:
         return list(splits)
-    return list(map(typ, filter(None, splits)))
+    return list(map(type, filter(None, splits)))
 
 
-def unflatten_poslist(
-    poslist: Sequence[Number], n_dims: int = 3
-) -> List[Tuple[Number]]:
+def unflatten_sequence(
+    sequence: Sequence[Any], n_dims: int = 3
+) -> List[Tuple[Any]]:
+    """Convert a flat (one-dimensional) sequence into a list of tuples.
+
+    Args:
+        sequence: One-dimensional sequence. The length of @sequence has to be
+            an integer multiple of @n_dims.
+        n_dims: Length of the tuples that @sequence is to be divided into.
+
+    Returns:
+        Elements of @sequence as a list of tuples of length @n_dims.
+
+    Raises:
+        IndexError: If the length of @sequence is not an integer multiple of
+            @n_dims.
+    """
     return [
         tuple(
-            poslist[i + k] for k in range(n_dims)
-        ) for i in range(0, len(poslist), n_dims)
+            sequence[i + k] for k in range(n_dims)
+        ) for i in range(0, len(sequence), n_dims)
     ]
 
 
 def offset_coords(
     coords: Sequence[Sequence[Number]], offset: Sequence[Number]
 ) -> List[Tuple[Number]]:
+    """Translate each coordinate in a sequence by a given offset.
+
+    Args:
+        coords: Sequence of coordinates.
+        offset: Offset to translate each element in @coords by. All elements
+            in @coords must be of the same length which has to match the length
+            of @offset.
+
+    Returns:
+        List of tuples containing the coordinates in @coords translated by
+        @offset.
+
+    Raises:
+        IndexError: If not all elements in @coords have the same length and / or
+            if this length does not match the length of @offset.
+    """
+    if len(coords) == 0:
+        return coords
+    length = len(coords[0])
+    if not all(len(x) == length for x in coords):
+        raise IndexError(
+            "Not all elements in the sequence of coordinates have the same length")
+    if len(offset) != length:
+        raise IndexError(
+            "The length of the elements in the sequence of coordinates does "
+            "not match the length of the given offset")
     return [
         tuple(
             coord[i] + offset[i] for i in range(len(offset))
@@ -90,6 +187,15 @@ def offset_coords(
 def scale_coords(
     coords: Sequence[Sequence[Number]], scale: Number
 ) -> List[Tuple[Number]]:
+    """Scale each coordinate in a sequence by a given scale.
+
+    Args:
+        coords: Sequence of coordinates.
+        scale: Factor to scale each element in @coords by.
+
+    Returns:
+        List of tuples containing the coordinates in @coords scaled by @scale.
+    """
     return [
         tuple(
             dim * scale for dim in coord
@@ -100,6 +206,26 @@ def scale_coords(
 def transform_coords(
     coords: Sequence[Sequence[Number]], offset: Sequence[Number], scale: Number
 ) -> List[Tuple[Number]]:
+    """Translate and then scale each coordinate in a sequence by a given offset
+    and scale.
+
+    Args:
+        coords: Sequence of coordinates.
+        offset: Offset to translate each element in @coords by. All elements
+            in @coords must be of the same length which has to match the length
+            of @offset.
+        scale: Factor to scale each element in @coords by. The scaling is
+            applied AFTER the translation and is applied to all dimensions of
+            the coordinates equally.
+
+    Returns:
+        List of tuples containing the coordinates in @coords translated by
+        @offset and scaled by @scale.
+
+    Raises:
+        IndexError: If not all elements in @coords have the same length and / or
+            if this length does not match the length of @offset.
+    """
     return scale_coords(offset_coords(coords, offset), scale)
 
 
@@ -108,36 +234,36 @@ def main(
     merge_vertices: bool = False, merge_distance: float = 0.001,
     recalculate_view: bool = False
 ) -> None:
-    prefix_map = get_prefix_map(filename)
+    namespaces = get_namespaces(filename)
     offset = tuple([-1 * dim for dim in origin])
 
     bm = bmesh.new()
     for _, element in ET.iterparse(filename, events=("end",)):
-        if element.tag != substitute_uri("core:cityObjectMember", prefix_map):
+        if element.tag != substitute_uri("core:cityObjectMember", namespaces):
             continue
 
-        bldgs = element.findall(".//bldg:Building", prefix_map)
+        bldgs = element.findall(".//bldg:Building", namespaces)
         for bldg in bldgs:
             bldg_verts = []
-            parts = bldg.findall(".//bldg:BuildingPart", prefix_map)
+            parts = bldg.findall(".//bldg:BuildingPart", namespaces)
             if len(parts) == 0:
                 parts = [bldg]
             for part in parts:
-                polygons = part.findall('.//gml:Polygon', prefix_map)
-                triangles = part.findall('.//gml:Triangle', prefix_map)
+                polygons = part.findall('.//gml:Polygon', namespaces)
+                triangles = part.findall('.//gml:Triangle', namespaces)
                 faces = polygons + triangles
                 for face in faces:
                     face_verts = []
-                    pos_list = face.find(".//gml:posList", prefix_map)
+                    pos_list = face.find(".//gml:posList", namespaces)
                     if pos_list is None:
                         pos_list = ""
-                        positions = face.findall(".//gml:pos", prefix_map)
+                        positions = face.findall(".//gml:pos", namespaces)
                         for pos in positions:
                             pos_list += f"{pos.text} "
                     else:
                         pos_list = pos_list.text
                     pos_list = " ".join(pos_list.split()) # remove tabs etc.
-                    coords = unflatten_poslist(string_to_list(pos_list, typ=float))
+                    coords = unflatten_sequence(string_to_list(pos_list, type=float))
                     if coords[0] == coords[-1]:
                         coords = coords[:-1]
                     coords = transform_coords(coords, offset=offset, scale=scale)
