@@ -12,18 +12,17 @@ bl_info = {
 import bmesh
 import bpy
 from bpy_extras.io_utils import ImportHelper
-from bpy.props import (
-    BoolProperty,
-    FloatProperty,
-    CollectionProperty,
-)
+from bpy.props import BoolProperty, FloatProperty, CollectionProperty
 import math
+from numbers import Number
 import os
 from xml.etree import ElementTree as ET
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
 def get_prefix_map(
-    filename: str, allow_duplicates: bool = False, exit_early: bool = True):
+    filename: str, allow_duplicates: bool = False, exit_early: bool = True
+) -> Dict[str, str]:
     prefix_map = {}
     for event, element in ET.iterparse(filename, events=("start-ns", "start")):
         if event == "start-ns":
@@ -39,7 +38,9 @@ def get_prefix_map(
     return prefix_map
 
 
-def substitute_uri(tag: str, prefix_map=None) -> str:
+def substitute_uri(
+    tag: str, prefix_map: Optional[Dict[str, str]] = None
+) -> str:
     if prefix_map is None or len(prefix_map) == 0:
         return tag
     splits = tag.split(":")
@@ -56,12 +57,19 @@ def substitute_uri(tag: str, prefix_map=None) -> str:
         raise AttributeError(f"Multiple colons in tag '{tag}' are invalid.")
 
 
-def string_to_list(string, typ=float, delimiter=" "):
+def string_to_list(
+    string: str, typ: Optional[Callable] = None, delimiter: str = " "
+) -> List[Any]:
     splits = string.split(delimiter)
+    splits = filter(None, splits)
+    if typ is None:
+        return list(splits)
     return list(map(typ, filter(None, splits)))
 
 
-def unflatten_poslist(poslist, n_dims=3):
+def unflatten_poslist(
+    poslist: Sequence[Number], n_dims: int = 3
+) -> List[Tuple[Number]]:
     return [
         tuple(
             poslist[i + k] for k in range(n_dims)
@@ -69,7 +77,9 @@ def unflatten_poslist(poslist, n_dims=3):
     ]
 
 
-def offset_coords(coords, offset):
+def offset_coords(
+    coords: Sequence[Sequence[Number]], offset: Sequence[Number]
+) -> List[Tuple[Number]]:
     return [
         tuple(
             coord[i] + offset[i] for i in range(len(offset))
@@ -77,7 +87,9 @@ def offset_coords(coords, offset):
     ]
 
 
-def scale_coords(coords, scale):
+def scale_coords(
+    coords: Sequence[Sequence[Number]], scale: Number
+) -> List[Tuple[Number]]:
     return [
         tuple(
             dim * scale for dim in coord
@@ -85,11 +97,17 @@ def scale_coords(coords, scale):
     ]
 
 
-def transform_coords(coords, offset, scale):
+def transform_coords(
+    coords: Sequence[Sequence[Number]], offset: Sequence[Number], scale: Number
+) -> List[Tuple[Number]]:
     return scale_coords(offset_coords(coords, offset), scale)
 
 
-def main(filename, origin, scale, merge_vertices, merge_distance, recalculate_view):
+def main(
+    filename: str, origin: Sequence[Number] = (0, 0, 0), scale: Number = 1,
+    merge_vertices: bool = False, merge_distance: float = 0.001,
+    recalculate_view: bool = False
+) -> None:
     prefix_map = get_prefix_map(filename)
     offset = tuple([-1 * dim for dim in origin])
 
@@ -119,7 +137,7 @@ def main(filename, origin, scale, merge_vertices, merge_distance, recalculate_vi
                     else:
                         pos_list = pos_list.text
                     pos_list = " ".join(pos_list.split()) # remove tabs etc.
-                    coords = unflatten_poslist(string_to_list(pos_list))
+                    coords = unflatten_poslist(string_to_list(pos_list, typ=float))
                     if coords[0] == coords[-1]:
                         coords = coords[:-1]
                     coords = transform_coords(coords, offset=offset, scale=scale)
