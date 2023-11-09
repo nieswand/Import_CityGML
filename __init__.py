@@ -237,9 +237,14 @@ def main(
     namespaces = get_namespaces(filename)
     offset = tuple([-1 * dim for dim in origin])
 
+    try:
+        member_tag = substitute_uri("core:cityObjectMember", namespaces)
+    except KeyError:
+        member_tag = substitute_uri("cityObjectMember", namespaces)
+
     bm = bmesh.new()
     for _, element in ET.iterparse(filename, events=("end",)):
-        if element.tag != substitute_uri("core:cityObjectMember", namespaces):
+        if element.tag != member_tag:
             continue
 
         bldgs = element.findall(".//bldg:Building", namespaces)
