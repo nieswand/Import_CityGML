@@ -6,6 +6,7 @@ import math
 from numbers import Number
 import os
 from xml.etree import ElementTree as ET
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
@@ -389,8 +390,12 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
 
     def execute(self, context):
         folder = (os.path.dirname(self.filepath))
-        for file in self.files:
+        n = len(self.files)
+        pow10 = 1 + math.floor(math.log10(n))
+        for i, file in enumerate(self.files):
             path_to_file = os.path.join(folder, file.name)
+            start_time = time.monotonic()
+            print(f"[{i+1:0{pow10}}/{n}] Processing '{file.name}': ", end="")
             try:
                 main(
                     filename=path_to_file,
@@ -404,11 +409,10 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
                     merge_distance=self.merge_distance,
                     recalculate_view=self.recalculate_view,
                 )
-                print(f"'{file.name}' imported")
+                duration = time.monotonic() - start_time
+                print(f"Succesfully imported in {duration:.2f} seconds.")
             except Exception as exc:
-                print(
-                    f"Error while importing '{file.name}': "
-                    f"[{type(exc).__name__}] {exc}")
+                print(f"[{type(exc).__name__}] {exc}")
         return{"FINISHED"}
 
 
