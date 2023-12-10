@@ -1,14 +1,16 @@
+from __future__ import annotations
 import bmesh
 import bpy
 from bpy_extras.io_utils import ImportHelper
-from bpy.props import BoolProperty, FloatProperty, CollectionProperty
+from bpy.props import BoolProperty, CollectionProperty, FloatProperty, IntProperty
 import math
 from numbers import Number
+import numpy as np
 import os
+from osgeo import gdal, osr
 from xml.etree import ElementTree as ET
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-
 
 bl_info = {
     "name": "Import CityGML",
@@ -230,67 +232,376 @@ def transform_coords(
     return scale_coords(offset_coords(coords, offset), scale)
 
 
+def reduce_coords(
+    coords: Sequence[Sequence[Number]], n: Optional[int]
+) -> List[Tuple[Number]]:
+    if n is None or n >= len(coords):
+        return coords
+    if n <= 0:
+        return []
+    step = int(len(coords)/n)
+    return coords[:n*step:step]
+
+
+def reproject_coords(
+    coords: Sequence[Sequence[Number]],
+    transformation: osr.CoordinateTransformation
+) -> List[Tuple[Number]]:
+    return [transformation.TransformPoint(*coord) for coord in coords]
+
+
+def get_boundaries(
+    element: ET.Element, namespaces
+) -> Tuple[np.ndarray, np.ndarray]:
+    list_elements = element.findall(".//gml:posList", namespaces)
+    single_elements = element.findall(".//gml:pos", namespaces)
+    pos_list = ""
+    for pos_element in (list_elements + single_elements):
+        pos_list += f"{pos_element.text} "
+    pos_list = " ".join(pos_list.split()) # remove tabs etc.
+    coords = unflatten_sequence(string_to_list(pos_list, type=float))
+    return np.amin(coords, axis=0), np.amax(coords, axis=0)
+
+
+# TODO:
+#   Docstrings
+#   Triangulation
+#   Textures
+#   Members could have multiple or no buildings
+#   Members could have other sub-elements than buildings
+#   Exception handling for ID checks and everything namespace related
+#   How to reliably get all surfaces?
+#   Surfaces could have multiple polygons / posLists
+#   'Inner' polygons cut-outs
+#   n_corners <= 2 doesn't make sense / raise exception
+class Surface():
+    def __init__(
+        self, id: Optional[str] = None, verts = List[Tuple[Number]],
+    ) -> None:
+        self.id = id
+        self.verts = verts
+
+    def __str__(self) -> str:
+        return f"Surface(id: {self.id}, verts: {self.verts})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    @staticmethod
+    def from_element(
+        element: ET.Element, namespaces: Dict[str, str] = {},
+        n_corners: int = 0
+    ) -> Optional[Surface]:
+        face_id = element.attrib.get(substitute_uri("gml:id", namespaces))
+        pos_list = element.find(".//gml:posList", namespaces)
+        if pos_list is None:
+            pos_list = ""
+            positions = element.findall(".//gml:pos", namespaces)
+            for pos in positions:
+                pos_list += f"{pos.text} "
+        else:
+            pos_list = pos_list.text
+        pos_list = " ".join(pos_list.split()) # remove tabs etc.
+        coords = unflatten_sequence(string_to_list(pos_list, type=float))
+        if coords[0] == coords[-1]:
+            coords = coords[:-1]
+        if n_corners:
+            coords = reduce_coords(coords, n_corners)
+        if len(coords) <= 2:
+            return
+        return Surface(id=face_id, verts=coords)
+
+    def to_mesh(
+        self, offset: Sequence[Number] = (0, 0, 0), scale: Number = 1.,
+        triangulate: bool = False
+    ) -> bmesh.types.BMesh:
+        bm = bmesh.new()
+        name = "Surface" if self.id is None else self.id
+        #coords = reproject_coords(self.verts, trans)
+        coords = transform_coords(self.verts, offset=offset, scale=scale)
+        for vert in coords:
+            bm.verts.new(vert)
+        bm.faces.new(bm.verts)
+        if triangulate:
+            #bm.normal_update()
+            bmesh.ops.triangulate(bm, faces=bm.faces)
+        mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(mesh)
+        del bm
+        return mesh
+
+    @property
+    def lower(self):
+        return np.amin(self.verts, axis=0)
+
+    @property
+    def upper(self):
+        return np.amax(self.verts, axis=0)
+
+
+class BuildingPart():
+    def __init__(
+        self, id: Optional[str] = None, faces = List[Surface],
+        height: Optional[float] = None
+    ) -> None:
+        self.id = id
+        self.faces = faces
+        #if height is None:
+        #    lowers = []
+        #    uppers = []
+        #    for face in faces:
+        #        uppers.append(face.lower)
+        #        lowers.append(face.upper)
+        #    if not self.faces:
+        #        height = 0.
+        #    else:
+        #        height = float(
+        #            (np.amax(uppers, axis=0) - np.amin(lowers, axis=0))[-1])
+        self.height = height
+
+    def __str__(self) -> str:
+        return (
+            f"BuildingPart(id: {self.id}, faces: {self.faces}, "
+            f"height: {self.height})")
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    @staticmethod
+    def from_element(
+        element: ET.Element, namespaces: Dict[str, str] = {},
+        only_footprint: bool = False, n_corners: int = 0
+    ) -> Optional[BuildingPart]:
+        part_id = element.attrib.get(substitute_uri("gml:id", namespaces))
+        faces: List[Surface] = []
+        bounds = element.findall('.//bldg:boundedBy', namespaces)
+        #lowers = []
+        #uppers = []
+        for bound in bounds:
+            #face = Surface.from_element(bound, namespaces, n_corners)
+            #if face is None:
+            #    continue
+            #lowers.append(face.lower)
+            #uppers.append(face.upper)
+            #ground = bound.findall(".//bldg:GroundSurface", namespaces)
+            #if not ground and only_footprint:
+            #    continue
+            #faces.append(face)
+            ground = bound.findall(".//bldg:GroundSurface", namespaces)
+            if not ground and only_footprint:
+                continue
+            face = Surface.from_element(bound, namespaces, n_corners)
+            if face is None:
+                continue
+        #lower = np.amin(lowers, axis=0)
+        #upper = np.amax(uppers, axis=0)
+        #height = float((upper - lower)[-1])
+        height = None
+        if not faces:
+            return
+        return BuildingPart(id=part_id, faces=faces, height=height)
+
+    def to_mesh(
+        self, offset: Sequence[Number] = (0, 0, 0), scale: Number = 1.,
+        merge_vertices: bool = False, merge_distance: float = 0.0001,
+        extrude_footprint: bool = False, triangulate: bool = False
+    ) -> bmesh.types.BMesh:
+        bm = bmesh.new()
+        name = "BuildingPart" if self.id is None else self.id
+        for face in self.faces:
+            face_mesh = face.to_mesh(
+                offset=offset, scale=scale, triangulate=triangulate)
+            bm.from_mesh(face_mesh)
+            del face_mesh
+        if merge_vertices:
+            bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=merge_distance)
+        if extrude_footprint:
+            # FIXME: Handle extrusion with multiple faces and triangulation
+            bm.normal_update()
+            ext = bmesh.ops.extrude_face_region(bm, geom=bm.faces)
+            ext_verts = [e for e in ext["geom"] if isinstance(e, bmesh.types.BMVert)]
+            bmesh.ops.translate(bm, vec=[0, 0, self.height], verts=ext_verts)
+        mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(mesh)
+        del bm
+        return mesh
+
+
+class Building():
+    def __init__(
+        self, id: Optional[str] = None, parts = List[BuildingPart],
+    ) -> None:
+        self.id = id
+        self.parts = parts
+
+    def __str__(self) -> str:
+        return f"Building(id: {self.id}, parts: {self.parts})"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    @staticmethod
+    def from_element(
+        element: ET.Element, namespaces: Dict[str, str] = {},
+        only_footprint: bool = False, n_corners: int = 0
+    ) -> Optional[Building]:
+        bldg_id = element.attrib.get(substitute_uri("gml:id", namespaces))
+        parts: List[BuildingPart] = []
+        part_elements = element.findall(".//bldg:BuildingPart", namespaces)
+        if not part_elements:
+            part_elements = [element]
+        for part_element in part_elements:
+            part = BuildingPart.from_element(
+                part_element, namespaces, only_footprint, n_corners)
+            if part is None:
+                continue
+            parts.append(part)
+        if not parts:
+            return
+        return Building(id=bldg_id, parts=parts)
+
+    def to_mesh(
+        self, offset: Sequence[Number] = (0, 0, 0), scale: Number = 1.,
+        merge_vertices: bool = False, merge_distance: float = 0.0001,
+        extrude_footprints: bool = False, triangulate: bool = False
+    ) -> bmesh.types.BMesh:
+        bm = bmesh.new()
+        name = "Building" if self.id is None else self.id
+        for part in self.parts:
+            part_mesh = part.to_mesh(
+                offset=offset, scale=scale,
+                merge_vertices=merge_vertices,
+                merge_distance=merge_distance,
+                extrude_footprint=extrude_footprints,
+                triangulate=triangulate)
+            bm.from_mesh(part_mesh)
+            del part_mesh
+        mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(mesh)
+        del bm
+        return mesh
+
+
 def main(
     filename: str, origin: Sequence[Number] = (0, 0, 0), scale: Number = 1,
+    only_footprints: bool = False, n_corners: int = 0,
+    extrude_footprints: bool = False, triangulate_faces: bool = False,
     merge_vertices: bool = False, merge_distance: float = 0.001,
     recalculate_view: bool = False
 ) -> None:
     namespaces = get_namespaces(filename)
     offset = tuple([-1 * dim for dim in origin])
 
+    #gdal.UseExceptions()
+    #crs_src = osr.SpatialReference()
+    #crs_src.ImportFromEPSG(7415)
+    #crs_tar = osr.SpatialReference()
+    #crs_tar.ImportFromEPSG(25832)
+    #trans = osr.CoordinateTransformation(crs_src, crs_tar)
+
     try:
         member_tag = substitute_uri("core:cityObjectMember", namespaces)
     except KeyError:
         member_tag = substitute_uri("cityObjectMember", namespaces)
+    #member_tag = substitute_uri("ogr:featureMember", namespaces)
 
-    bm = bmesh.new()
+    buildings: List[Building] = []
     for _, element in ET.iterparse(filename, events=("end",)):
         if element.tag != member_tag:
             continue
-
-        bldgs = element.findall(".//bldg:Building", namespaces)
-        for bldg in bldgs:
-            bldg_verts = []
-            parts = bldg.findall(".//bldg:BuildingPart", namespaces)
-            if len(parts) == 0:
-                parts = [bldg]
-            for part in parts:
-                polygons = part.findall('.//gml:Polygon', namespaces)
-                triangles = part.findall('.//gml:Triangle', namespaces)
-                faces = polygons + triangles
-                for face in faces:
-                    face_verts = []
-                    pos_list = face.find(".//gml:posList", namespaces)
-                    if pos_list is None:
-                        pos_list = ""
-                        positions = face.findall(".//gml:pos", namespaces)
-                        for pos in positions:
-                            pos_list += f"{pos.text} "
-                    else:
-                        pos_list = pos_list.text
-                    pos_list = " ".join(pos_list.split()) # remove tabs etc.
-                    coords = unflatten_sequence(string_to_list(pos_list, type=float))
-                    if coords[0] == coords[-1]:
-                        coords = coords[:-1]
-                    coords = transform_coords(coords, offset=offset, scale=scale)
-                    for vert in coords:
-                        face_verts.append(bm.verts.new(vert))
-                    bm.faces.new(face_verts)
-                    bldg_verts.extend(face_verts)
-            if merge_vertices:
-                bmesh.ops.remove_doubles(
-                    bm, verts=bldg_verts, dist=merge_distance)
+        building_elements = element.findall(".//bldg:Building", namespaces)
+        #building_elements = element.findall(".//ogr:entities", namespaces)
+        for building_element in building_elements:
+            building = Building.from_element(
+                building_element, namespaces, only_footprints, n_corners)
+            if building is not None:
+                buildings.append(building)
         element.clear()
 
-    if len(bm.verts) == 0:
-        del bm
-        raise ValueError("No geometry found in GML file.")
+    if not buildings:
+        raise ValueError("No valid geometry found in GML file.")
+
+    #bldg_ids = []
+    #poly_ids = []
+    bm = bmesh.new()
+    for building in buildings:
+        building_mesh = building.to_mesh(
+            offset=offset, scale=scale,
+            merge_vertices=merge_vertices,
+            merge_distance=merge_distance,
+            extrude_footprints=extrude_footprints,
+            triangulate=triangulate_faces)
+        bm.from_mesh(building_mesh)
+        del building_mesh
+
+#    for _, element in ET.iterparse(filename, events=("end",)):
+#        if element.tag != member_tag:
+#            continue
+#
+#        #print(f"element: {element}")
+#        bldgs = element.findall(".//bldg:Building", namespaces)
+#        #bldgs = element.findall(".//ogr:entities", namespaces)
+#        for bldg in bldgs:
+#            #print(f"\tbuilding: {bldg}")
+#            ##bldg_id = bldg.attrib.get(substitute_uri("gml:id", namespaces))
+#            ##if bldg_id is not None and bldg_id in bldg_ids:
+#            ##    continue
+#            ##bldg_ids.append(bldg_id)
+#            #print(f"\tid: {bldg_id}")
+#            bldg_verts = []
+#            bldg_faces = []
+#            #parts = bldg.findall(".//bldg:BuildingPart", namespaces)
+#            parts = []
+#            if len(parts) == 0:
+#                parts = [bldg]
+#            for part in parts:
+#                polygons = part.findall('.//gml:Polygon', namespaces)
+#                patches = part.findall('.//gml:PolygonPatch', namespaces)
+#                triangles = part.findall('.//gml:Triangle', namespaces)
+#                faces = polygons + triangles + patches
+#                #print(f"\t{len(faces)}")
+#                for face in faces:
+#                    ##poly_id = face.attrib.get(substitute_uri("gml:id", namespaces))
+#                    ##if poly_id is not None and poly_id in poly_ids:
+#                    ##    continue
+#                    ##poly_ids.append(poly_id)
+#                    face_verts = []
+#                    pos_list = face.find(".//gml:posList", namespaces)
+#                    if pos_list is None:
+#                        pos_list = ""
+#                        positions = face.findall(".//gml:pos", namespaces)
+#                        for pos in positions:
+#                            pos_list += f"{pos.text} "
+#                    else:
+#                        pos_list = pos_list.text
+#                    pos_list = " ".join(pos_list.split()) # remove tabs etc.
+#                    coords = unflatten_sequence(string_to_list(pos_list, type=float))
+#                    if coords[0] == coords[-1]:
+#                        coords = coords[:-1]
+#                    #coords = reproject_coords(coords, trans)
+#                    coords = transform_coords(coords, offset=offset, scale=scale)
+#                    for vert in coords:
+#                        face_verts.append(bm.verts.new(vert))
+#                    if len(face_verts) < 3:
+#                        continue
+#                    bldg_faces.append(bm.faces.new(face_verts))
+#                    bldg_verts.extend(face_verts)
+#            if triangulate_faces:
+#                bm.normal_update()
+#                bmesh.ops.triangulate(bm, faces=bldg_faces)
+#            if merge_vertices:
+#                bmesh.ops.remove_doubles(
+#                    bm, verts=bldg_verts, dist=merge_distance)
+#        element.clear()
 
     obj_name = os.path.basename(filename)
     mesh = bpy.data.meshes.new(obj_name)
     bm.to_mesh(mesh)
     obj = bpy.data.objects.new(obj_name, mesh)
     bpy.context.collection.objects.link(obj)
+    del bm
+    del mesh
+    del buildings
 
     if recalculate_view:
         viewport = None
@@ -347,6 +658,28 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
             "based on size of imported geometry"),
         default=False,
     )
+    only_footprints: BoolProperty(
+        name="Import only footprints",
+        description="Import only 'GroundSurface' faces",
+        default=False,
+    )
+    reduce_footprints: IntProperty(
+        name="Reduce footprints",
+        description="Reduce footprint polygons",
+        default=0,
+        min=0,
+        subtype="UNSIGNED",
+    )
+    extrude_footprints: BoolProperty(
+        name="Extrude footprints",
+        description="Extrude footprints to height of buildings",
+        default=False,
+    )
+    triangulate_faces: BoolProperty(
+        name="Triangulate Faces",
+        description="Triangulate faces (slow)",
+        default=False,
+    )
     merge_vertices: BoolProperty(
         name="Merge Vertices",
         description="Merge duplicate vertices of buildings (slow)",
@@ -380,6 +713,20 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
 
         box = layout.box()
         row = box.row(align=True)
+        row.label(text="Footprint Options:")
+        row = box.row(align=True)
+        row.prop(self, "only_footprints", text="Import Footprints Only")
+        row = box.row(align=True)
+        row.prop(self, "reduce_footprints", text="Reduce to N-Gons (0 = off)")
+        row = box.row(align=True)
+        row.prop(self, "extrude_footprints", text="Extrude Footprints")
+
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text="Mesh Operations:")
+        row = box.row(align=True)
+        row.prop(self, "triangulate_faces", text="Triangulate Faces (slow)")
+        row = box.row(align=True)
         row.prop(self, "merge_vertices", text="Merge Vertices (slow)")
         row = box.row(align=True)
         row.prop(self, "merge_distance", text="Merge Distance")
@@ -395,7 +742,7 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
         for i, file in enumerate(self.files):
             path_to_file = os.path.join(folder, file.name)
             start_time = time.monotonic()
-            print(f"[{i+1:0{pow10}}/{n}] Processing '{file.name}': ", end="")
+            print(f"[{i+1:0{pow10}}/{n}] Processing '{file.name}'")
             try:
                 main(
                     filename=path_to_file,
@@ -405,14 +752,18 @@ class CityGMLSelector(bpy.types.Operator, ImportHelper):
                         self.origin_z,
                     ),
                     scale=self.import_scale,
+                    only_footprints=self.only_footprints,
+                    n_corners=self.reduce_footprints,
+                    extrude_footprints=self.extrude_footprints,
+                    triangulate_faces=self.triangulate_faces,
                     merge_vertices=self.merge_vertices,
                     merge_distance=self.merge_distance,
                     recalculate_view=self.recalculate_view,
                 )
                 duration = time.monotonic() - start_time
-                print(f"Succesfully imported in {duration:.2f} seconds.")
+                print(f"\tSuccesfully imported in {duration:.2f} seconds.")
             except Exception as exc:
-                print(f"[{type(exc).__name__}] {exc}")
+                print(f"\tError while importing: [{type(exc).__name__}] {exc}")
         return{"FINISHED"}
 
 
